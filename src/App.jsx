@@ -6,7 +6,7 @@ import {
 import {
   LayoutDashboard, RefreshCcw, Trophy, BarChart3,
   FlaskConical, PieChart as PieIcon, TrendingUp, Table as TableIcon,
-  Plus, X, Trash2, Settings, PlayCircle, PauseCircle, Percent, Lock, LogOut
+  Plus, X, Trash2, Settings, PlayCircle, PauseCircle, Percent, Lock, LogOut, UserPlus
 } from 'lucide-react';
 
 // --- CONFIGURATION ---
@@ -15,11 +15,13 @@ const API_BASE_URL = "https://variant-backend-lfoa.onrender.com";
 const App = () => {
   // --- AUTH STATE ---
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isRegistering, setIsRegistering] = useState(false); // New: Toggle Login/Register
+  const [usernameInput, setUsernameInput] = useState("");      // New: For registration
   const [passwordInput, setPasswordInput] = useState("");
   const [authError, setAuthError] = useState("");
 
   // --- APP STATE ---
-  // טעינת רשימת האפליקציות המותרות מהזיכרון
+  // Load allowed apps from local storage to persist state on refresh
   const [allowedApps, setAllowedApps] = useState(() => {
     const saved = localStorage.getItem("variant_allowed_apps");
     return saved ? JSON.parse(saved) : [];
@@ -45,17 +47,14 @@ const App = () => {
   const [trafficSum, setTrafficSum] = useState(100);
   const COLORS = ['#6366f1', '#a5b4fc', '#e0e7ff', '#94a3b8'];
 
-  // --- AUTH CHECK ON LOAD ---
+  // --- PERSISTENCE ---
   useEffect(() => {
     const savedKey = localStorage.getItem("variant_admin_key");
     if (savedKey) {
       setIsAuthenticated(true);
-      // אם יש מפתח שמור, אפשר עקרונית לבצע בדיקת אימות מול השרת כאן
-      // כדי לוודא שהוא עדיין בתוקף ולרענן את רשימת האפליקציות
     }
   }, []);
 
-  // --- PERSISTENCE ---
   useEffect(() => {
     localStorage.setItem("variant_app_id", appId);
   }, [appId]);
@@ -70,7 +69,7 @@ const App = () => {
     const headers = {
       'Content-Type': 'application/json',
       'X-Admin-Key': key,
-      'X-App-ID': appId // שליחת ה-ID שנבחר בכל בקשה
+      'X-App-ID': appId
     };
 
     const response = await fetch(`${API_BASE_URL}${endpoint}`, {
@@ -79,8 +78,7 @@ const App = () => {
     });
 
     if (response.status === 401 || response.status === 403) {
-      // אם אין הרשאה - התנתק
-      if (endpoint !== '/api/admin/login') {
+      if (endpoint !== '/api/admin/login' && endpoint !== '/api/admin/register') {
         handleLogout();
         throw new Error("Unauthorized");
       }
@@ -95,7 +93,6 @@ const App = () => {
       if (response.ok) {
         const data = await response.json();
         setExperiments(data);
-        // בחירה אוטומטית של הניסוי הראשון אם אין בחירה
         if (data.length > 0) {
           if (!selectedExperiment || !data.find(e => e.key === selectedExperiment)) {
             setSelectedExperiment(data[0].key);
@@ -104,7 +101,6 @@ const App = () => {
           setSelectedExperiment(null);
         }
       } else {
-        // במקרה של שגיאה או רשימה ריקה (למשל אפליקציה אסורה)
         setExperiments([]);
       }
     } catch (err) { console.error(err); }
@@ -127,7 +123,6 @@ const App = () => {
     finally { setLoading(false); }
   };
 
-  // שליפה מחדש כשמתחברים או כשמחליפים אפליקציה
   useEffect(() => {
     if (isAuthenticated) {
       setExperiments([]);
@@ -140,7 +135,7 @@ const App = () => {
 
   // --- AUTH ACTIONS ---
   const handleLogin = async (e) => {
-    e.preventDefault();
+    if (e) e.preventDefault();
     setAuthError("");
     try {
       const res = await fetch(`${API_BASE_URL}/api/admin/login`, {
@@ -153,10 +148,9 @@ const App = () => {
         const data = await res.json();
         localStorage.setItem("variant_admin_key", passwordInput);
 
-        // עדכון רשימת האפליקציות המותרות
         setAllowedApps(data.allowed_apps);
 
-        // אם האפליקציה שנבחרה כרגע לא ברשימה, החלף לראשונה ברשימה
+        // Select first allowed app if current selection is invalid
         if (data.allowed_apps.length > 0 && !data.allowed_apps.includes(appId)) {
           setAppId(data.allowed_apps[0]);
         }
@@ -168,6 +162,31 @@ const App = () => {
     } catch (err) { setAuthError("Server Connection Error"); }
   };
 
+  const handleRegister = async (e) => {
+    e.preventDefault();
+    setAuthError("");
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/admin/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: usernameInput, password: passwordInput })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        // Auto-login logic after successful registration
+        localStorage.setItem("variant_admin_key", passwordInput);
+        setAllowedApps([data.generated_app_id]);
+        setAppId(data.generated_app_id);
+        setIsAuthenticated(true);
+        alert(`Account created!\nYour App ID is: ${data.generated_app_id}`);
+      } else {
+        const data = await res.json();
+        setAuthError(data.error || "Registration failed");
+      }
+    } catch (err) { setAuthError("Server Connection Error"); }
+  };
+
   const handleLogout = () => {
     localStorage.removeItem("variant_admin_key");
     localStorage.removeItem("variant_allowed_apps");
@@ -175,6 +194,8 @@ const App = () => {
     setExperiments([]);
     setRawData(null);
     setAllowedApps([]);
+    setIsRegistering(false);
+    setPasswordInput("");
   };
 
   // --- EXPERIMENT ACTIONS ---
@@ -195,7 +216,6 @@ const App = () => {
   const handleDelete = async () => {
     if (!confirm("Delete this experiment?")) return;
     await secureFetch(`/api/admin/experiments/${selectedExperiment}`, { method: 'DELETE' });
-    // רענון מלא במקום רילוד
     fetchExperiments();
     setSelectedExperiment(null);
   };
@@ -252,31 +272,64 @@ const App = () => {
   const currentExp = experiments.find(e => e.key === selectedExperiment);
   const currentExpStatus = currentExp?.status || 'active';
 
-  // --- RENDER LOGIN SCREEN ---
+  // --- RENDER LOGIN / REGISTER SCREEN ---
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4">
         <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-sm text-center">
           <div className="bg-indigo-100 p-3 rounded-full inline-block mb-4">
-            <Lock className="text-indigo-600" size={32} />
+            {isRegistering ? <UserPlus className="text-indigo-600" size={32} /> : <Lock className="text-indigo-600" size={32} />}
           </div>
-          <h1 className="text-2xl font-bold text-slate-800 mb-2">Variant Admin</h1>
-          <p className="text-slate-500 text-sm mb-6">Enter your API Key to access.</p>
+          <h1 className="text-2xl font-bold text-slate-800 mb-2">
+            {isRegistering ? "Create Account" : "Variant Admin"}
+          </h1>
+          <p className="text-slate-500 text-sm mb-6">
+            {isRegistering ? "Get your own App ID & SDK Key" : "Enter your API Key to access."}
+          </p>
 
-          <form onSubmit={handleLogin} className="space-y-4">
+          <form onSubmit={isRegistering ? handleRegister : handleLogin} className="space-y-4">
+
+            {/* Username field - Only for Registration */}
+            {isRegistering && (
+              <input
+                type="text"
+                placeholder="App/Company Name"
+                className="w-full px-4 py-3 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500"
+                value={usernameInput}
+                onChange={(e) => setUsernameInput(e.target.value)}
+                required
+              />
+            )}
+
             <input
               type="password"
-              placeholder="API Key"
-              className="w-full px-4 py-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all"
+              placeholder={isRegistering ? "Choose a Secret Key" : "API Key"}
+              className="w-full px-4 py-3 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500"
               value={passwordInput}
               onChange={(e) => setPasswordInput(e.target.value)}
-              autoFocus
+              required
             />
+
             {authError && <p className="text-red-500 text-xs font-bold">{authError}</p>}
+
             <button className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold hover:bg-indigo-700 transition-colors shadow-md">
-              Access Dashboard
+              {isRegistering ? "Sign Up & Get App ID" : "Access Dashboard"}
             </button>
           </form>
+
+          {/* Toggle between Login and Register */}
+          <div className="mt-6 pt-4 border-t border-slate-100">
+            <button
+              onClick={() => {
+                setIsRegistering(!isRegistering);
+                setAuthError("");
+                setPasswordInput("");
+              }}
+              className="text-indigo-600 text-sm font-bold hover:underline"
+            >
+              {isRegistering ? "Already have a key? Login" : "New here? Create an account"}
+            </button>
+          </div>
         </div>
         <p className="mt-8 text-slate-400 text-xs">Variant.ai • Secure Analytics Platform</p>
       </div>
@@ -292,7 +345,7 @@ const App = () => {
           <h1 className="font-bold text-lg tracking-tight text-slate-900">Variant<span className="text-indigo-600">.ai</span></h1>
         </div>
 
-        {/* --- APP ID SELECTOR (UPDATED) --- */}
+        {/* --- APP ID SELECTOR --- */}
         <div className="px-4 pt-4 pb-2">
           <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Target App ID</label>
           <div className="flex items-center gap-2 border border-slate-200 rounded-lg px-2 py-1.5 bg-slate-50 focus-within:ring-1 focus-within:ring-indigo-500 transition-all">
@@ -308,7 +361,6 @@ const App = () => {
             </select>
           </div>
         </div>
-        {/* --------------------------- */}
 
         <nav className="flex-1 p-3 space-y-1 mt-2 overflow-y-auto">
           <div className="flex justify-between items-center px-2 mb-2">
@@ -357,7 +409,6 @@ const App = () => {
           <div className="flex-1 flex items-center justify-center text-slate-400 bg-white rounded-xl border border-slate-200 border-dashed">{selectedExperiment ? "No data yet. Start the test!" : "Select an experiment from the left."}</div>
         ) : (
           <div className="flex-1 flex flex-col gap-4 min-h-0">
-            {/* ... Statistics Cards ... */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 shrink-0">
               <div className="bg-white px-4 py-3 rounded-xl shadow-sm border border-slate-200 flex justify-between items-center"><div><p className="text-slate-500 text-[10px] font-bold uppercase tracking-wider">Total Traffic</p><p className="text-2xl font-bold text-slate-800 mt-1">{processedData.reduce((acc, c) => acc + c.exposure, 0)}</p></div><div className="p-2 bg-blue-50 text-blue-600 rounded-lg"><PieIcon size={20} /></div></div>
               <div className="bg-white px-4 py-3 rounded-xl shadow-sm border border-slate-200 flex justify-between items-center"><div><p className="text-slate-500 text-[10px] font-bold uppercase tracking-wider">Conversions</p><p className="text-2xl font-bold text-slate-800 mt-1">{processedData.reduce((acc, c) => acc + c.conversion, 0)}</p></div><div className="p-2 bg-emerald-50 text-emerald-600 rounded-lg"><TrendingUp size={20} /></div></div>
