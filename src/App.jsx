@@ -4,7 +4,7 @@ import {
   PieChart, Pie, Legend
 } from 'recharts';
 import {
-  LayoutDashboard, RefreshCcw, Trophy, BarChart3, AlertCircle,
+  LayoutDashboard, RefreshCcw, Trophy, BarChart3,
   FlaskConical, PieChart as PieIcon, TrendingUp, Table as TableIcon,
   Plus, X, Trash2, Settings, PlayCircle, PauseCircle, Percent, Lock, LogOut
 } from 'lucide-react';
@@ -19,7 +19,12 @@ const App = () => {
   const [authError, setAuthError] = useState("");
 
   // --- APP STATE ---
-  // NEW: Multi-tenancy State (Initialize from local storage)
+  // טעינת רשימת האפליקציות המותרות מהזיכרון
+  const [allowedApps, setAllowedApps] = useState(() => {
+    const saved = localStorage.getItem("variant_allowed_apps");
+    return saved ? JSON.parse(saved) : [];
+  });
+
   const [appId, setAppId] = useState(() => localStorage.getItem("variant_app_id") || "default");
 
   const [experiments, setExperiments] = useState([]);
@@ -45,13 +50,19 @@ const App = () => {
     const savedKey = localStorage.getItem("variant_admin_key");
     if (savedKey) {
       setIsAuthenticated(true);
+      // אם יש מפתח שמור, אפשר עקרונית לבצע בדיקת אימות מול השרת כאן
+      // כדי לוודא שהוא עדיין בתוקף ולרענן את רשימת האפליקציות
     }
   }, []);
 
-  // --- APP ID PERSISTENCE ---
+  // --- PERSISTENCE ---
   useEffect(() => {
     localStorage.setItem("variant_app_id", appId);
   }, [appId]);
+
+  useEffect(() => {
+    localStorage.setItem("variant_allowed_apps", JSON.stringify(allowedApps));
+  }, [allowedApps]);
 
   // --- SECURE API FETCH HELPER ---
   const secureFetch = async (endpoint, options = {}) => {
@@ -59,7 +70,7 @@ const App = () => {
     const headers = {
       'Content-Type': 'application/json',
       'X-Admin-Key': key,
-      'X-App-ID': appId // <--- NEW: Send the selected App ID with every request
+      'X-App-ID': appId // שליחת ה-ID שנבחר בכל בקשה
     };
 
     const response = await fetch(`${API_BASE_URL}${endpoint}`, {
@@ -67,10 +78,12 @@ const App = () => {
       headers: { ...headers, ...options.headers }
     });
 
-    if (response.status === 401) {
-      // Logout if key is invalid
-      handleLogout();
-      throw new Error("Unauthorized");
+    if (response.status === 401 || response.status === 403) {
+      // אם אין הרשאה - התנתק
+      if (endpoint !== '/api/admin/login') {
+        handleLogout();
+        throw new Error("Unauthorized");
+      }
     }
     return response;
   };
@@ -82,7 +95,7 @@ const App = () => {
       if (response.ok) {
         const data = await response.json();
         setExperiments(data);
-        // If we have experiments, select the first one; otherwise clear selection
+        // בחירה אוטומטית של הניסוי הראשון אם אין בחירה
         if (data.length > 0) {
           if (!selectedExperiment || !data.find(e => e.key === selectedExperiment)) {
             setSelectedExperiment(data[0].key);
@@ -90,13 +103,16 @@ const App = () => {
         } else {
           setSelectedExperiment(null);
         }
+      } else {
+        // במקרה של שגיאה או רשימה ריקה (למשל אפליקציה אסורה)
+        setExperiments([]);
       }
     } catch (err) { console.error(err); }
   };
 
   const fetchData = async () => {
     if (!selectedExperiment) {
-      setRawData(null); // Clear data if no experiment selected
+      setRawData(null);
       return;
     }
     setLoading(true); setError(null);
@@ -106,16 +122,14 @@ const App = () => {
       const data = await response.json();
       setRawData(data);
     } catch (err) {
-      // Only set error if it wasn't an auth redirect
       if (isAuthenticated) setError("Connection failed.");
     }
     finally { setLoading(false); }
   };
 
-  // Updated Effect: Fetch when Authenticated OR when App ID changes
+  // שליפה מחדש כשמתחברים או כשמחליפים אפליקציה
   useEffect(() => {
     if (isAuthenticated) {
-      // Clear current view when switching apps to avoid confusion
       setExperiments([]);
       setSelectedExperiment(null);
       fetchExperiments();
@@ -134,28 +148,40 @@ const App = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password: passwordInput })
       });
+
       if (res.ok) {
+        const data = await res.json();
         localStorage.setItem("variant_admin_key", passwordInput);
+
+        // עדכון רשימת האפליקציות המותרות
+        setAllowedApps(data.allowed_apps);
+
+        // אם האפליקציה שנבחרה כרגע לא ברשימה, החלף לראשונה ברשימה
+        if (data.allowed_apps.length > 0 && !data.allowed_apps.includes(appId)) {
+          setAppId(data.allowed_apps[0]);
+        }
+
         setIsAuthenticated(true);
-        // fetchExperiments is handled by the useEffect above
       } else {
-        setAuthError("Invalid Admin Password");
+        setAuthError("Invalid API Key");
       }
     } catch (err) { setAuthError("Server Connection Error"); }
   };
 
   const handleLogout = () => {
     localStorage.removeItem("variant_admin_key");
+    localStorage.removeItem("variant_allowed_apps");
     setIsAuthenticated(false);
     setExperiments([]);
     setRawData(null);
+    setAllowedApps([]);
   };
 
   // --- EXPERIMENT ACTIONS ---
   const handleCreate = async (e) => {
     e.preventDefault();
     const payload = {
-      appId: appId, // <--- NEW: Bind new experiment to the current App ID
+      appId: appId,
       name: newExpName, key: newExpKey,
       variants: [
         { name: variantA, value: variantA.toLowerCase(), traffic_percentage: 50 },
@@ -169,7 +195,9 @@ const App = () => {
   const handleDelete = async () => {
     if (!confirm("Delete this experiment?")) return;
     await secureFetch(`/api/admin/experiments/${selectedExperiment}`, { method: 'DELETE' });
-    window.location.reload();
+    // רענון מלא במקום רילוד
+    fetchExperiments();
+    setSelectedExperiment(null);
   };
 
   const handleReset = async () => {
@@ -186,7 +214,7 @@ const App = () => {
     setShowEditModal(false); fetchExperiments();
   };
 
-  // ... Helpers for Edit Logic ...
+  // ... Helpers ...
   const openEditModal = () => {
     const current = experiments.find(e => e.key === selectedExperiment);
     if (!current) return;
@@ -233,12 +261,12 @@ const App = () => {
             <Lock className="text-indigo-600" size={32} />
           </div>
           <h1 className="text-2xl font-bold text-slate-800 mb-2">Variant Admin</h1>
-          <p className="text-slate-500 text-sm mb-6">Enter your security key to access the dashboard.</p>
+          <p className="text-slate-500 text-sm mb-6">Enter your API Key to access.</p>
 
           <form onSubmit={handleLogin} className="space-y-4">
             <input
               type="password"
-              placeholder="Admin Key"
+              placeholder="API Key"
               className="w-full px-4 py-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all"
               value={passwordInput}
               onChange={(e) => setPasswordInput(e.target.value)}
@@ -264,16 +292,20 @@ const App = () => {
           <h1 className="font-bold text-lg tracking-tight text-slate-900">Variant<span className="text-indigo-600">.ai</span></h1>
         </div>
 
-        {/* --- NEW: APP ID SELECTOR --- */}
+        {/* --- APP ID SELECTOR (UPDATED) --- */}
         <div className="px-4 pt-4 pb-2">
           <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Target App ID</label>
           <div className="flex items-center gap-2 border border-slate-200 rounded-lg px-2 py-1.5 bg-slate-50 focus-within:ring-1 focus-within:ring-indigo-500 transition-all">
-            <input
-              className="bg-transparent text-xs font-mono text-slate-700 w-full outline-none font-bold"
+            <select
+              className="bg-transparent text-xs font-mono text-slate-700 w-full outline-none font-bold cursor-pointer"
               value={appId}
               onChange={(e) => setAppId(e.target.value)}
-              placeholder="e.g. android_v1"
-            />
+            >
+              {allowedApps.length === 0 && <option value="default">No Apps Found</option>}
+              {allowedApps.map(app => (
+                <option key={app} value={app}>{app}</option>
+              ))}
+            </select>
           </div>
         </div>
         {/* --------------------------- */}
@@ -283,14 +315,15 @@ const App = () => {
             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Experiments</p>
             <button onClick={() => setShowCreateModal(true)} className="p-1 hover:bg-slate-100 rounded text-indigo-600"><Plus size={16} /></button>
           </div>
+          {experiments.length === 0 && <p className="text-xs text-slate-400 px-2 italic">No experiments found.</p>}
           {experiments.map((exp) => (
             <button key={exp.key} onClick={() => setSelectedExperiment(exp.key)} className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-xs font-medium transition-all ${selectedExperiment === exp.key ? 'bg-indigo-50 text-indigo-700 shadow-sm ring-1 ring-indigo-200' : 'text-slate-500 hover:bg-slate-50'}`}>
-              <div className="flex items-center gap-2"><LayoutDashboard size={16} /> {exp.name}</div>
+              <div className="flex items-center gap-2 truncate max-w-[140px]"><LayoutDashboard size={16} /> {exp.name}</div>
               {exp.status === 'paused' && <span className="w-2 h-2 rounded-full bg-amber-400" title="Paused"></span>}
             </button>
           ))}
         </nav>
-        {/* LOGOUT BUTTON */}
+
         <div className="p-4 border-t border-slate-100">
           <button onClick={handleLogout} className="w-full flex items-center gap-2 text-slate-500 hover:text-red-600 text-xs font-bold transition-colors">
             <LogOut size={16} /> Logout
@@ -313,27 +346,30 @@ const App = () => {
             )}
           </div>
           <div className="flex gap-2">
-            <button onClick={openEditModal} className="flex items-center gap-2 px-3 py-1.5 bg-white border border-slate-200 text-slate-700 rounded-lg text-xs font-semibold hover:bg-slate-50 transition-all shadow-sm"><Settings size={14} /> Manage</button>
-            <button onClick={handleDelete} className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"><Trash2 size={18} /></button>
-            <button onClick={fetchData} disabled={loading} className="flex items-center gap-2 px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-semibold hover:bg-indigo-700 transition-all shadow-sm active:scale-95"><RefreshCcw size={14} className={loading ? "animate-spin" : ""} /></button>
+            <button onClick={openEditModal} disabled={!currentExp} className="flex items-center gap-2 px-3 py-1.5 bg-white border border-slate-200 text-slate-700 rounded-lg text-xs font-semibold hover:bg-slate-50 transition-all shadow-sm disabled:opacity-50"><Settings size={14} /> Manage</button>
+            <button onClick={handleDelete} disabled={!currentExp} className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50"><Trash2 size={18} /></button>
+            <button onClick={fetchData} disabled={loading || !currentExp} className="flex items-center gap-2 px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-semibold hover:bg-indigo-700 transition-all shadow-sm active:scale-95 disabled:opacity-50"><RefreshCcw size={14} className={loading ? "animate-spin" : ""} /></button>
           </div>
         </header>
 
         {/* --- CHARTS --- */}
         {!processedData.length ? (
-          <div className="flex-1 flex items-center justify-center text-slate-400 bg-white rounded-xl border border-slate-200 border-dashed">{selectedExperiment ? "No data yet. Start the test!" : "Select an experiment."}</div>
+          <div className="flex-1 flex items-center justify-center text-slate-400 bg-white rounded-xl border border-slate-200 border-dashed">{selectedExperiment ? "No data yet. Start the test!" : "Select an experiment from the left."}</div>
         ) : (
           <div className="flex-1 flex flex-col gap-4 min-h-0">
+            {/* ... Statistics Cards ... */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 shrink-0">
               <div className="bg-white px-4 py-3 rounded-xl shadow-sm border border-slate-200 flex justify-between items-center"><div><p className="text-slate-500 text-[10px] font-bold uppercase tracking-wider">Total Traffic</p><p className="text-2xl font-bold text-slate-800 mt-1">{processedData.reduce((acc, c) => acc + c.exposure, 0)}</p></div><div className="p-2 bg-blue-50 text-blue-600 rounded-lg"><PieIcon size={20} /></div></div>
               <div className="bg-white px-4 py-3 rounded-xl shadow-sm border border-slate-200 flex justify-between items-center"><div><p className="text-slate-500 text-[10px] font-bold uppercase tracking-wider">Conversions</p><p className="text-2xl font-bold text-slate-800 mt-1">{processedData.reduce((acc, c) => acc + c.conversion, 0)}</p></div><div className="p-2 bg-emerald-50 text-emerald-600 rounded-lg"><TrendingUp size={20} /></div></div>
               <div className="bg-white px-4 py-3 rounded-xl shadow-sm border border-slate-200 flex justify-between items-center"><div><p className="text-slate-500 text-[10px] font-bold uppercase tracking-wider">Uplift</p><p className="text-2xl font-bold text-indigo-600 mt-1">+{stats?.uplift}%</p></div><div className="p-2 bg-indigo-50 text-indigo-600 rounded-lg"><BarChart3 size={20} /></div></div>
               <div className="bg-gradient-to-br from-indigo-600 to-violet-600 px-4 py-3 rounded-xl shadow-md text-white flex justify-between items-center relative overflow-hidden"><Trophy size={60} className="absolute -right-2 -bottom-2 opacity-10" /><div className="relative z-10"><p className="text-indigo-100 text-[10px] font-bold uppercase tracking-wider">Winner</p><p className="text-lg font-bold capitalize truncate max-w-[120px]">{stats?.winner.name.replace('_', ' ')}</p><span className="bg-white/20 px-1.5 py-0.5 rounded text-[10px] font-semibold">{stats?.winner.rate}% CR</span></div></div>
             </div>
+
             <div className="flex-1 grid grid-cols-1 lg:grid-cols-3 gap-4 min-h-0">
               <div className="lg:col-span-2 bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex flex-col min-h-0"><h3 className="font-bold text-slate-700 text-sm mb-2 flex items-center gap-2 shrink-0"><BarChart3 size={16} className="text-slate-400" /> Conversion Rate</h3><div className="flex-1 min-h-0"><ResponsiveContainer width="100%" height="100%"><BarChart data={processedData}><CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" /><XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 10 }} tickFormatter={(val) => val.replace('_', ' ')} dy={10} /><YAxis axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 10 }} unit="%" width={30} /><Tooltip cursor={{ fill: '#f8fafc' }} contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)', fontSize: '12px' }} /><Bar dataKey="rate" radius={[4, 4, 0, 0]} barSize={40}>{processedData.map((entry, index) => <Cell key={`cell-${index}`} fill={index === 0 ? '#4f46e5' : '#cbd5e1'} />)}</Bar></BarChart></ResponsiveContainer></div></div>
               <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex flex-col min-h-0"><h3 className="font-bold text-slate-700 text-sm mb-2 flex items-center gap-2 shrink-0"><PieIcon size={16} className="text-slate-400" /> Distribution</h3><div className="flex-1 min-h-0 relative"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={processedData} cx="50%" cy="50%" innerRadius={40} outerRadius={60} paddingAngle={5} dataKey="exposure">{processedData.map((entry, index) => (<Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />))}</Pie><Tooltip /><Legend verticalAlign="bottom" iconSize={8} wrapperStyle={{ fontSize: '10px' }} /></PieChart></ResponsiveContainer><div className="absolute inset-0 flex items-center justify-center pointer-events-none pb-6"><div className="text-center"><p className="text-xl font-bold text-slate-700">{processedData.reduce((acc, curr) => acc + curr.exposure, 0)}</p></div></div></div></div>
             </div>
+
             <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden shrink-0 flex flex-col">
               <div className="p-3 border-b border-slate-100 flex items-center gap-2 bg-slate-50 shrink-0"><TableIcon size={14} className="text-slate-400" /><h3 className="font-bold text-slate-700 text-xs uppercase tracking-wider">Raw Data</h3></div>
               <div className="overflow-auto max-h-40"><table className="w-full text-left border-collapse"><thead><tr className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold border-b border-slate-100"><th className="px-4 py-2">Variant</th><th className="px-4 py-2 text-right">Views</th><th className="px-4 py-2 text-right">Clicks</th><th className="px-4 py-2 text-right">CR%</th></tr></thead><tbody className="divide-y divide-slate-50">{processedData.map((row) => (<tr key={row.name} className="hover:bg-slate-50 text-xs"><td className="px-4 py-2 font-medium text-slate-800 capitalize">{row.name.replace('_', ' ')}</td><td className="px-4 py-2 text-right text-slate-500">{row.exposure}</td><td className="px-4 py-2 text-right text-slate-500">{row.conversion}</td><td className="px-4 py-2 text-right font-bold text-slate-700">{row.rate}%</td></tr>))}</tbody></table></div>
@@ -342,7 +378,7 @@ const App = () => {
         )}
       </main>
 
-      {/* MODALS REMAIN THE SAME, JUST USING secureFetch INSIDE THEM */}
+      {/* MODALS */}
       {showCreateModal && (
         <div className="absolute inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden">
