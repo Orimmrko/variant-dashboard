@@ -19,6 +19,9 @@ const App = () => {
   const [authError, setAuthError] = useState("");
 
   // --- APP STATE ---
+  // NEW: Multi-tenancy State (Initialize from local storage)
+  const [appId, setAppId] = useState(() => localStorage.getItem("variant_app_id") || "default");
+
   const [experiments, setExperiments] = useState([]);
   const [selectedExperiment, setSelectedExperiment] = useState(null);
   const [rawData, setRawData] = useState(null);
@@ -45,12 +48,18 @@ const App = () => {
     }
   }, []);
 
+  // --- APP ID PERSISTENCE ---
+  useEffect(() => {
+    localStorage.setItem("variant_app_id", appId);
+  }, [appId]);
+
   // --- SECURE API FETCH HELPER ---
   const secureFetch = async (endpoint, options = {}) => {
     const key = localStorage.getItem("variant_admin_key");
     const headers = {
       'Content-Type': 'application/json',
-      'X-Admin-Key': key
+      'X-Admin-Key': key,
+      'X-App-ID': appId // <--- NEW: Send the selected App ID with every request
     };
 
     const response = await fetch(`${API_BASE_URL}${endpoint}`, {
@@ -73,13 +82,23 @@ const App = () => {
       if (response.ok) {
         const data = await response.json();
         setExperiments(data);
-        if (data.length > 0 && !selectedExperiment) setSelectedExperiment(data[0].key);
+        // If we have experiments, select the first one; otherwise clear selection
+        if (data.length > 0) {
+          if (!selectedExperiment || !data.find(e => e.key === selectedExperiment)) {
+            setSelectedExperiment(data[0].key);
+          }
+        } else {
+          setSelectedExperiment(null);
+        }
       }
     } catch (err) { console.error(err); }
   };
 
   const fetchData = async () => {
-    if (!selectedExperiment) return;
+    if (!selectedExperiment) {
+      setRawData(null); // Clear data if no experiment selected
+      return;
+    }
     setLoading(true); setError(null);
     try {
       const response = await secureFetch(`/api/admin/summary/${selectedExperiment}`);
@@ -93,7 +112,16 @@ const App = () => {
     finally { setLoading(false); }
   };
 
-  useEffect(() => { if (isAuthenticated) fetchExperiments(); }, [isAuthenticated]);
+  // Updated Effect: Fetch when Authenticated OR when App ID changes
+  useEffect(() => {
+    if (isAuthenticated) {
+      // Clear current view when switching apps to avoid confusion
+      setExperiments([]);
+      setSelectedExperiment(null);
+      fetchExperiments();
+    }
+  }, [isAuthenticated, appId]);
+
   useEffect(() => { if (isAuthenticated) fetchData(); }, [selectedExperiment, isAuthenticated]);
 
   // --- AUTH ACTIONS ---
@@ -109,7 +137,7 @@ const App = () => {
       if (res.ok) {
         localStorage.setItem("variant_admin_key", passwordInput);
         setIsAuthenticated(true);
-        fetchExperiments();
+        // fetchExperiments is handled by the useEffect above
       } else {
         setAuthError("Invalid Admin Password");
       }
@@ -127,6 +155,7 @@ const App = () => {
   const handleCreate = async (e) => {
     e.preventDefault();
     const payload = {
+      appId: appId, // <--- NEW: Bind new experiment to the current App ID
       name: newExpName, key: newExpKey,
       variants: [
         { name: variantA, value: variantA.toLowerCase(), traffic_percentage: 50 },
@@ -226,7 +255,7 @@ const App = () => {
     );
   }
 
-  // --- RENDER DASHBOARD (Same as before + Logout Button) ---
+  // --- RENDER DASHBOARD ---
   return (
     <div className="flex h-screen w-screen bg-slate-50 text-slate-800 font-sans overflow-hidden relative">
       <aside className="w-56 bg-white border-r border-slate-200 flex flex-col shadow-lg z-10 shrink-0">
@@ -234,6 +263,21 @@ const App = () => {
           <FlaskConical className="text-indigo-600" size={20} />
           <h1 className="font-bold text-lg tracking-tight text-slate-900">Variant<span className="text-indigo-600">.ai</span></h1>
         </div>
+
+        {/* --- NEW: APP ID SELECTOR --- */}
+        <div className="px-4 pt-4 pb-2">
+          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Target App ID</label>
+          <div className="flex items-center gap-2 border border-slate-200 rounded-lg px-2 py-1.5 bg-slate-50 focus-within:ring-1 focus-within:ring-indigo-500 transition-all">
+            <input
+              className="bg-transparent text-xs font-mono text-slate-700 w-full outline-none font-bold"
+              value={appId}
+              onChange={(e) => setAppId(e.target.value)}
+              placeholder="e.g. android_v1"
+            />
+          </div>
+        </div>
+        {/* --------------------------- */}
+
         <nav className="flex-1 p-3 space-y-1 mt-2 overflow-y-auto">
           <div className="flex justify-between items-center px-2 mb-2">
             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Experiments</p>
@@ -258,13 +302,15 @@ const App = () => {
         <header className="flex justify-between items-center shrink-0 bg-white px-5 py-3 rounded-xl border border-slate-200 shadow-sm">
           <div>
             <div className="flex items-center gap-3">
-              <h2 className="text-lg font-bold text-slate-900 leading-tight">{currentExp?.name}</h2>
+              <h2 className="text-lg font-bold text-slate-900 leading-tight">{currentExp?.name || "Select an Experiment"}</h2>
               {currentExpStatus === 'paused' && <span className="px-2 py-0.5 bg-amber-100 text-amber-700 text-[10px] font-bold uppercase rounded-full">Paused</span>}
             </div>
-            <div className="flex items-center gap-2 mt-0.5">
-              <span className={`w-1.5 h-1.5 rounded-full ${currentExpStatus === 'active' ? 'bg-green-500 animate-pulse' : 'bg-slate-300'}`}></span>
-              <p className="text-slate-400 text-xs font-medium">{currentExpStatus === 'active' ? 'Live Data Stream' : 'Experiment Paused'}</p>
-            </div>
+            {currentExp && (
+              <div className="flex items-center gap-2 mt-0.5">
+                <span className={`w-1.5 h-1.5 rounded-full ${currentExpStatus === 'active' ? 'bg-green-500 animate-pulse' : 'bg-slate-300'}`}></span>
+                <p className="text-slate-400 text-xs font-medium">{currentExpStatus === 'active' ? 'Live Data Stream' : 'Experiment Paused'}</p>
+              </div>
+            )}
           </div>
           <div className="flex gap-2">
             <button onClick={openEditModal} className="flex items-center gap-2 px-3 py-1.5 bg-white border border-slate-200 text-slate-700 rounded-lg text-xs font-semibold hover:bg-slate-50 transition-all shadow-sm"><Settings size={14} /> Manage</button>
