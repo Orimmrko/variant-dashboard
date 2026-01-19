@@ -1,16 +1,78 @@
-# React + Vite
+# Variant - Admin Dashboard 📊
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new)
+[![React](https://img.shields.io/badge/React-18-blue?logo=react)](https://react.dev)
+[![Tailwind CSS](https://img.shields.io/badge/Tailwind-3.0-38bdf8?logo=tailwindcss)](https://tailwindcss.com)
 
-Currently, two official plugins are available:
+The administration portal for the **Variant** A/B testing platform. This Single Page Application (SPA) allows developers and product managers to create experiments, manage traffic allocation, and visualize real-time analytics.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+---
 
-## React Compiler
+## 🚀 Live Demo
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+**URL:** [https://variant-dashboard-pied.vercel.app](https://variant-dashboard-pied.vercel.app/)
 
-## Expanding the ESLint configuration
+> **Guest Access:**
+> Use the API Key: `guest-key-456`
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+---
+
+## ✨ Features
+
+* **Experiment Management:** Create, edit, pause, and delete experiments.
+* **Traffic Allocation:** Drag-and-drop or input percentage for variant traffic.
+* **Real-time Analytics:** Visual charts (Bar/Pie) powered by `Recharts`.
+* **Multi-Tenancy:** Manage multiple apps from a single account.
+* **Responsive Design:** Built with Tailwind CSS for mobile and desktop support.
+
+## 📸 Screenshots
+
+| Experiment List | Analytics & Graphs |
+|:---:|:---:|
+| ![Home](screenshots/dashboard_home.png) | ![Stats](screenshots/analytics_view.png) |
+
+---
+
+## 💻 Local Development
+
+To run the dashboard locally, you need Node.js installed.
+
+### 1. Clone & Install
+```bash
+git clone https://github.com/Orimmrko/variant-dashboard.git
+cd variant-dashboard
+
+# Install dependencies
+npm install
+```
+
+### 2. Configuration
+Open `App.jsx` and ensure the `API_BASE_URL` points to your backend (local or production):
+```javascript
+const API_BASE_URL = "http://localhost:5000"; // For local backend
+// OR
+const API_BASE_URL = "https://variant-backend-lfoa.onrender.com"; // For prod backend
+```
+
+### 3. Run
+```bash
+npm run dev
+```
+The app will be available at `http://localhost:5173`.
+
+---
+
+## ☁️ Deployment (Vercel)
+
+The easiest way to deploy this project is via [Vercel](https://vercel.com).
+
+1.  Push this repository to GitHub.
+2.  Import the project in Vercel.
+3.  Vercel will detect `Vite` automatically.
+4.  Click **Deploy**.
+
+---
+
+## 📄 License
+
+This project is licensed under the MIT License.
